@@ -1,4 +1,5 @@
-return function(directory, primaryLanguage, configuredLocale)
+return function(configuredLocale)
+    local directory = hs.spoons.resourcePath("i18n/interface/")
     local function loadCatalog(locale)
         if type(locale) == "string" and locale:match("^[A-Za-z][A-Za-z0-9%-]*$") then
             return loadfile(directory .. locale .. ".lua", "t")
@@ -17,8 +18,9 @@ return function(directory, primaryLanguage, configuredLocale)
     end
 
     local locale = configuredLocale
-    if locale == nil and primaryLanguage then
-        locale = primaryLanguage:lower():match("^[a-z]+")
+    if locale == nil then
+        local primaryLanguage = hs.host.locale.preferredLanguages()[1]
+        locale = primaryLanguage and primaryLanguage:lower():match("^[a-z]+")
     end
     if locale ~= nil and locale ~= "en" then
         local chunk, detail = loadCatalog(locale)

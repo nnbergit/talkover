@@ -11,24 +11,24 @@ local function find(element, match, depth)
     end
 end
 
-local function named(element, names)
-    for _, name in ipairs(names) do
-        if element.AXTitle == name or element.AXDescription == name then return true end
-    end
-    return false
-end
-
-local function actionNamed(element, names)
-    for _, action in ipairs(element:actionNames() or {}) do
-        local title = action:match("^Name:([^\r\n]+)") or action
-        for _, name in ipairs(names) do
-            if title == name then return action end
-        end
-    end
+local function menuCommand(root, menuID, commandID, shortcut)
+    local menu = find(root.AXMenuBar, function(element)
+        return element.AXIdentifier == menuID
+    end, 2)
+    return (commandID and find(menu, function(element)
+        return element.AXRole == "AXMenuItem" and element.AXEnabled
+            and element.AXIdentifier == commandID
+    end, 2)) or find(menu, function(element)
+        return element.AXRole == "AXMenuItem" and element.AXEnabled and shortcut(element)
+    end, 2)
 end
 
 local function press(element)
     return element and element:performAction("AXPress")
+end
+
+local function foldersList(window)
+    return find(window, function(element) return element.AXIdentifier == "FoldersList" end, 8)
 end
 
 local function isLibraryReady(window)
@@ -44,6 +44,12 @@ local function isLibraryReady(window)
         return element.AXRole == "AXButton" and element.AXIdentifier == "RecordButton"
             and element.AXEnabled == true
     end, 10) ~= nil
+end
+
+local function canNavigateLibrary(window)
+    return isLibraryReady(window) or find(window, function(element)
+        return element.AXIdentifier == "FolderView/RecoverButton"
+    end, 10)
 end
 
 
@@ -91,6 +97,12 @@ local function export(talkOver, t, done)
         end)
     end
 
+    local function toggleSidebar(root)
+        return press(menuCommand(root, "com.apple.menu.view", nil, function(item)
+            return item.AXMenuItemCmdChar == "S" and item.AXMenuItemCmdModifiers == 4 -- Control-Command-S
+        end))
+    end
+
     local function moveWindowAside(window)
         local actual = window:asHSWindow()
         if not actual or actual:isFullScreen() then return end
@@ -110,6 +122,9 @@ local function export(talkOver, t, done)
         local active = hs.application.frontmostApplication()
         local voice = run.voiceApp or hs.application.get(voiceID)
         local tookFocus = active and active:bundleID() == voiceID
+        if tookFocus and run.openedSidebar and foldersList(frontWindow(voiceID)) then
+            toggleSidebar(hs.axuielement.applicationElement(voice))
+        end
         if voice and (run.voiceApp or tookFocus) then
             if not voice:hide() then
                 talkOver.logger.w(t("voice_hide_failed"))
@@ -128,54 +143,41 @@ local function export(talkOver, t, done)
     end
 
     local function allRecordings(app, window)
-        if named(window, {"Все записи", "All Recordings"}) then return end
         local root = hs.axuielement.applicationElement(app)
-        local function allButton()
-            return find(root.AXFocusedWindow, function(element)
-                local label = element.AXDescription or ""
-                return element.AXRole == "AXButton"
-                    and (label:match("^Все записи,") or label:match("^All Recordings,"))
-            end, 8)
-        end
-        if not allButton() then
-            local sidebar = find(window, function(element)
-                return element.AXRole == "AXButton" and named(element, {"Боковое меню", "Sidebar"})
-            end, 8)
-            assert(press(sidebar), t("sidebar_missing"))
-        end
-        local button = waitFor(4, t("all_folder_missing"), allButton)
-        assert(press(button), t("all_folder_open_failed"))
-        waitFor(5, t("all_folder_switch_failed"), function()
-            local focused = frontWindow(voiceID)
-            return focused and named(focused, {"Все записи", "All Recordings"})
-        end)
-    end
-
-    local deleteNames = {"Удалить", "Delete", "AXDelete"}
-    local function recordingRows()
-        local window = frontWindow(voiceID)
-        assert(isLibraryReady(window) and named(window, {"Все записи", "All Recordings"}),
-            t("all_list_unavailable"))
-        local list = find(window, function(element) return element.AXIdentifier == "RecordingsList" end, 10)
+        local list = foldersList(window)
         if not list then
-            local empty = find(window, function(element)
-                return named(element, {"Нет записей", "No Recordings"})
-                    or named(element, {"Нет записей.", "No Recordings."})
-                    or element.AXValue == "Нет записей" or element.AXValue == "No Recordings"
-            end, 10)
-            assert(empty, t("recordings_list_missing"))
-            return {}
+            assert(toggleSidebar(root), t("sidebar_missing"))
+            list = waitFor(4, t("sidebar_missing"), function() return foldersList(frontWindow(voiceID)) end)
+            run.openedSidebar = true
         end
-
-        local rows = {}
-        local function visit(element, depth)
-            if element.AXRole == "AXButton" and actionNamed(element, deleteNames) then
-                rows[#rows + 1] = element
-            elseif depth > 0 then
-                for _, child in ipairs(element.AXChildren or {}) do visit(child, depth - 1) end
+        -- Voice Memos places All Recordings first in FoldersList.
+        local button
+        for _, child in ipairs(list.AXChildren or {}) do
+            if child.AXRole == "AXButton" then
+                button = child
+                break
             end
         end
-        visit(list, 6)
+        assert(button, t("all_folder_missing"))
+        if not button.AXSelected then assert(press(button), t("all_folder_open_failed")) end
+        waitFor(5, t("all_folder_switch_failed"), function()
+            return button.AXSelected and isLibraryReady(frontWindow(voiceID))
+        end)
+        run.allFolder = button
+    end
+
+    local function recordingRows()
+        local window = frontWindow(voiceID)
+        assert(isLibraryReady(window) and run.allFolder.AXSelected, t("all_list_unavailable"))
+        local list = find(window, function(element) return element.AXIdentifier == "RecordingsList" end, 10)
+        if not list then return {} end
+
+        local rows = {}
+        for _, element in ipairs(list.AXChildren or {}) do
+            if element.AXRole == "AXButton" then
+                rows[#rows + 1] = element
+            end
+        end
         return rows
     end
 
@@ -197,50 +199,35 @@ local function export(talkOver, t, done)
         return result
     end
 
-    local function isSelected(row, root)
-        if row.AXSelected ~= nil then return row.AXSelected == true or row.AXSelected == 1 end
-        local list = row.AXParent
-        for _, element in ipairs(list and list.AXSelectedChildren or {}) do
-            if element == row then return true end
-        end
-        local focused = root.AXFocusedUIElement
-        for _ = 1, 5 do
-            if not focused then return false end
-            if focused == row then return true end
-            focused = focused.AXParent
-        end
-        return false
+    local function isFocusedRecording(row, root)
+        return frontWindow(voiceID) and row.AXSelected and root.AXFocusedUIElement == row
     end
 
-    local copyMenus = {{"Правка", "Скопировать"}, {"Edit", "Copy"}}
-
-    local function matchesRecording(title, description)
-        return type(title) == "string" and title ~= ""
-            and (description == title or description:sub(1, #title + 2) == title .. ", ")
-    end
-
-    local function copiedAudio(app, row, description)
-        local root = hs.axuielement.applicationElement(app)
+    local function copiedAudio(root, row)
         assert(isLibraryReady(frontWindow(voiceID)), t("voice_busy"))
-        assert(press(row), t("select_recording_failed"))
-        local menu = waitFor(5, t("copy_unavailable"), function()
-            if not frontWindow(voiceID) or not isSelected(row, root) then return end
-            for _, path in ipairs(copyMenus) do
-                local item = app:findMenuItem(path)
-                if item and item.enabled then return path end
-            end
+        if not row.AXSelected then assert(press(row), t("select_recording_failed")) end
+        waitFor(5, t("select_recording_failed"), function()
+            if not frontWindow(voiceID) or not row.AXSelected then return end
+            if not isFocusedRecording(row, root) then row:setAttributeValue("AXFocused", true) end
+            return isFocusedRecording(row, root)
+        end)
+        local copy = waitFor(5, t("copy_unavailable"), function()
+            if not isFocusedRecording(row, root) then return end
+            -- The active Copy command can have an identifier derived from its translated title.
+            return menuCommand(root, "com.apple.menu.edit", "copy:", function(item)
+                return item.AXMenuItemCmdChar == "C" and item.AXMenuItemCmdModifiers == 0 -- Command-C
+            end)
         end)
 
         local before = pasteboard.changeCount()
         local saved = pasteboard.readAllData() or {}
         assert(pasteboard.changeCount() == before, t("clipboard_changed"))
-        assert(app:selectMenuItem(menu), t("copy_command_failed"))
+        assert(isFocusedRecording(row, root), t("selection_changed"))
+        assert(press(copy), t("copy_command_failed"))
         local result = waitFor(12, t("clipboard_audio_missing"), function()
             local count = pasteboard.changeCount()
             if count == before then return end
-            assert(frontWindow(voiceID) and isSelected(row, root), t("selection_changed"))
-            local title = pasteboard.readDataForUTI("public.utf8-plain-text")
-            if not matchesRecording(title, description) then return end
+            assert(isFocusedRecording(row, root), t("selection_changed"))
             local audio = pasteboard.readDataForUTI(audioType)
             if audio and #audio > 0 and pasteboard.changeCount() == count then
                 return {count = count, audio = audio}
@@ -301,11 +288,11 @@ local function export(talkOver, t, done)
     end
 
     local function exportOne(app, row, key)
-        local description = row.AXDescription
-        local audio = copiedAudio(app, row, description)
+        local root = hs.axuielement.applicationElement(app)
+        local audio = copiedAudio(root, row)
         local size = #audio
         if size > talkOver.maxBytes then
-            local message = t("oversize_message", {name = description, size = string.format("%.1f", size / 1000000)})
+            local message = t("oversize_message", {name = row.AXDescription, size = string.format("%.1f", size / 1000000)})
             talkOver.logger.w(message)
             hs.notify.new({title = t("oversize_title"), informativeText = message}):send()
             return false
@@ -327,12 +314,15 @@ local function export(talkOver, t, done)
 
         local name = exportName(source)
         local selected = currentRow(key)
-        assert(selected and selected == row and isSelected(selected, hs.axuielement.applicationElement(app)),
+        assert(selected and selected == row and isFocusedRecording(selected, root),
             t("export_selection_changed"))
-        local delete = assert(actionNamed(selected, deleteNames), t("delete_action_missing"))
+        local delete = assert(menuCommand(root, "com.apple.menu.edit", "delete:", function(item)
+            return item.AXMenuItemCmdChar == "\b" and item.AXMenuItemCmdModifiers == 8 -- Delete without Command
+        end), t("delete_action_missing"))
         local path = publish(source, name)
         talkOver.logger.i(t("recording_exported", {path = path}))
-        assert(selected:performAction(delete), t("delete_action_failed"))
+        assert(isFocusedRecording(selected, root), t("export_selection_changed"))
+        assert(press(delete), t("delete_action_failed"))
         waitFor(8, t("deleted_row_still_present"), function()
             return currentRow(key) == nil
         end)
@@ -360,7 +350,7 @@ local function export(talkOver, t, done)
             local window = root.AXFocusedWindow or root.AXMainWindow or (root.AXWindows or {})[1]
             if window and window.AXIdentifier == "SceneWindow" then
                 -- Если Диктофон уже открыт поверх других приложений, даём закончить запись или правку.
-                if not isLibraryReady(window) then return "busy" end
+                if not canNavigateLibrary(window) then return "busy" end
                 moveWindowAside(window)
                 run.usedDesktop = true
             end
@@ -370,7 +360,7 @@ local function export(talkOver, t, done)
         local app = waitFor(10, t("voice_launch_timeout"), function() return hs.application.get(voiceID) end)
         run.voiceApp = app
         local window = voiceWindow()
-        if not isLibraryReady(window) then return "busy" end
+        if not canNavigateLibrary(window) then return "busy" end
         moveWindowAside(window)
         allRecordings(app, window)
 

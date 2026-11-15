@@ -10,7 +10,7 @@ return {
     ffmpeg = "/opt/homebrew/bin/ffmpeg",
     ffprobe = "/opt/homebrew/bin/ffprobe",
     whisper = "/opt/homebrew/bin/whisper-cli",
-    language = "ru",
+    language = "ru", -- Whisper language code (e.g. "ru", "en", "de") or "auto".
     recordsDir = home .. "/data/talkover",
     transcriptsDir = home .. "/vaults/public/> transcript",
     model = home .. "/data/models/whisper/ggml-large-v3-turbo-q5_0.bin",

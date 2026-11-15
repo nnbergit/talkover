@@ -2,7 +2,7 @@ local obj = {}
 obj.name = "TalkOver"
 obj.version = "0.0.1"
 obj.author = "Olga Pavlova"
-obj.homepage = ""
+obj.homepage = "https://github.com/nnbergit/talkover"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
 
 local function audioNames()
@@ -29,18 +29,29 @@ local function read(path)
     return contents
 end
 
-local function cleanTranscript(text)
-    local settings = read(hs.spoons.resourcePath("ignored-lines.txt"))
-    if not settings then return nil, obj.t("ignored_lines_unreadable") end
+local function cleanTranscript(text, language)
+    if language == "auto" or not language:match("^[a-z]+$") then return text end
+    local filterPath = "i18n/whisper-hallucination/" .. language .. ".txt"
+    local settings = read(hs.spoons.resourcePath(filterPath))
+    if not settings then return text end
+
+    local function phraseKey(line)
+        local phrase = line:match("^%s*(.-)%s*$")
+        if language == "en" then
+            -- English subtitle credits can also end with an em dash.
+            phrase = phrase:gsub("%s*[.!]+$", ""):gsub("%s*—$", "")
+        end
+        return phrase
+    end
 
     local ignored = {}
     for line in settings:gmatch("[^\n]+") do
-        local phrase = line:match("^%s*(.-)%s*$")
+        local phrase = phraseKey(line)
         if phrase ~= "" then ignored[phrase] = true end
     end
 
     return (text:gsub("[^\n]*\n?", function(line)
-        if ignored[line:match("^%s*(.-)%s*$")] then return "" end
+        if ignored[phraseKey(line)] then return "" end
     end))
 end
 
@@ -71,7 +82,7 @@ local function trashAudio(name, audio, done)
     end)
 end
 
-local function transcribe(name, audio, transcript, originalStamp, done)
+local function transcribe(name, audio, transcript, originalStamp, language, done)
     local function warnAndContinue(message)
         warnRecording(name, message)
         return done()
@@ -106,14 +117,17 @@ local function transcribe(name, audio, transcript, originalStamp, done)
             if conversion ~= 0 then return fail(obj.t("conversion_failed", {detail = conversionError})) end
 
             return run(obj.whisper, {
-                "-m", obj.model, "-f", wav, "-l", obj.language, "-mc", "0", "-np", "-otxt", "-of", textPath,
+                "-m", obj.model, "-f", wav, "-l", language, "-mc", "0", "-np", "-otxt", "-of", textPath,
             }, function(recognition, _, recognitionError)
+                -- Some Whisper versions report an unknown language with a successful exit code.
+                if recognitionError:find("error: unknown language", 1, true) then
+                    return fail(obj.t("unsupported_whisper_language", {language = language}))
+                end
                 if recognition ~= 0 then return fail(obj.t("recognition_failed", {detail = recognitionError})) end
 
                 local text = read(textPath .. ".txt")
                 if not text or not text:find("%S") then return fail(obj.t("empty_transcript")) end
-                local cleaned, cleanError = cleanTranscript(text)
-                if not cleaned then return fail(cleanError) end
+                local cleaned = cleanTranscript(text, language)
                 if not cleaned:find("%S") then return fail(obj.t("empty_cleaned_transcript")) end
                 if stamp(audio) ~= originalStamp then return fail(obj.t("audio_changed")) end
 
@@ -138,7 +152,7 @@ local function transcribe(name, audio, transcript, originalStamp, done)
     end)
 end
 
-local function scan()
+local function scan(language)
     if not obj.watcher or obj.task or obj.exportRun then return end
     local ok, names = pcall(audioNames)
     if not ok then obj.logger.w(obj.t("scan_failed", {detail = names})); return end
@@ -156,7 +170,7 @@ local function scan()
                 if hs.fs.symlinkAttributes(transcript, "mode") == "file" then
                     return trashAudio(name, audio, nextRecording)
                 end
-                return transcribe(name, audio, transcript, originalStamp, nextRecording)
+                return transcribe(name, audio, transcript, originalStamp, language, nextRecording)
             end
         end
     end
@@ -225,23 +239,26 @@ function obj:init()
 
     self.logger = hs.logger.new(self.name, "info")
     self.export = dofile(hs.spoons.resourcePath("export.lua"))
-    local i18nDir = hs.spoons.resourcePath("i18n/")
-    local primaryLanguage
-    if defaults.locale == nil then
-        primaryLanguage = hs.host.locale.preferredLanguages()[1]
-    end
-    self.t = dofile(i18nDir .. "init.lua")(i18nDir, primaryLanguage, defaults.locale)
+    self.t = dofile(hs.spoons.resourcePath("i18n.lua"))(defaults.locale)
     return self
 end
 
 function obj:start()
     if self.watcher then return self end
+    local language = self.language
+    if type(language) ~= "string" or not language:find("%S") then
+        self.logger.e(self.t("unsupported_whisper_language", {language = language}))
+        return self
+    end
+
     local ok, err = pcall(audioNames)
     if not ok then self.logger.e(self.t("scan_failed", {detail = err})); return self end
 
-    self.scanTimer = hs.timer.delayed.new(self.scanDelay, scan)
+    language = language:lower()
+    local function scanQueue() scan(language) end
+    self.scanTimer = hs.timer.delayed.new(self.scanDelay, scanQueue)
     self.watcher = hs.pathwatcher.new(self.recordsDir, audioFilesChanged):start()
-    self.retryTimer = hs.timer.doEvery(self.scanInterval, scan)
+    self.retryTimer = hs.timer.doEvery(self.scanInterval, scanQueue)
     self.scanTimer:start()
     self.logger.i(self.t("watching_audio", {path = self.recordsDir}))
 
