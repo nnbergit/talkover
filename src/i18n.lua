@@ -8,6 +8,7 @@ return function(configuredLocale)
 
     local fallback = dofile(directory .. "en.lua")
     local catalog = fallback
+    local selectedLocale = "en"
 
     local function translate(key, values)
         local message = assert(catalog[key] or fallback[key], "Missing TalkOver message: " .. key)
@@ -27,10 +28,11 @@ return function(configuredLocale)
         local messages = chunk and chunk()
         if type(messages) == "table" then
             catalog = messages
+            selectedLocale = locale
         elseif configuredLocale ~= nil then
             error(translate("locale_unavailable", {locale = locale, detail = detail or "—"}), 2)
         end
     end
 
-    return translate
+    return translate, selectedLocale
 end

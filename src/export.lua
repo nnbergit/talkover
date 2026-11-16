@@ -1,3 +1,4 @@
+local obj = {}
 local voiceID = "com.apple.VoiceMemos"
 local audioType = "com.apple.m4a-audio"
 local pasteboard = hs.pasteboard
@@ -39,7 +40,7 @@ local function isLibraryReady(window)
             or id == "RecordingView/ApplyButton" or id == "RecordingView/CancelButton")
     end, 10)
     if editing then return false end
-    -- Обычная кнопка новой записи доступна в медиатеке, в том числе в пустой.
+    -- The Record button is available even when the library is empty.
     return find(window, function(element)
         return element.AXRole == "AXButton" and element.AXIdentifier == "RecordButton"
             and element.AXEnabled == true
@@ -53,9 +54,22 @@ local function canNavigateLibrary(window)
 end
 
 
-local function export(talkOver, t, done)
-    local destination = talkOver.recordsDir
-    local transcriptDir = talkOver.transcriptsDir
+function obj:init(config, logger, translate)
+    self.config = config
+    self.logger = logger
+    self.i18n = translate
+end
+
+function obj:isRunning()
+    return self.run ~= nil
+end
+
+function obj:start()
+    if self.run then return end
+    local config = self.config
+    local logger, i18n = self.logger, self.i18n
+    local destination = config.recordsDir
+    local transcriptDir = config.transcriptsDir
     local run = {}
 
     local function pause(seconds)
@@ -76,9 +90,9 @@ local function export(talkOver, t, done)
         local result
         run.task = assert(hs.task.new(executable, function(code, out, err)
             result = {code, out, err}
-        end, args), t("tool_start_failed", {tool = executable}))
-        assert(run.task:start(), t("tool_start_failed", {tool = executable}))
-        waitFor(timeout, t("tool_timeout", {tool = executable}), function() return result end)
+        end, args), i18n("tool_start_failed", {tool = executable}))
+        assert(run.task:start(), i18n("tool_start_failed", {tool = executable}))
+        waitFor(timeout, i18n("tool_timeout", {tool = executable}), function() return result end)
         run.task = nil
         return table.unpack(result)
     end
@@ -91,7 +105,7 @@ local function export(talkOver, t, done)
     end
 
     local function voiceWindow()
-        return waitFor(10, t("voice_window_missing"), function()
+        return waitFor(10, i18n("voice_window_missing"), function()
             local window = frontWindow(voiceID)
             if window and window.AXIdentifier == "SceneWindow" then return window end
         end)
@@ -127,7 +141,7 @@ local function export(talkOver, t, done)
         end
         if voice and (run.voiceApp or tookFocus) then
             if not voice:hide() then
-                talkOver.logger.w(t("voice_hide_failed"))
+                logger.w(i18n("voice_hide_failed"))
             end
         end
         if tookFocus and run.previousApp and run.previousApp:bundleID() ~= voiceID then
@@ -146,8 +160,8 @@ local function export(talkOver, t, done)
         local root = hs.axuielement.applicationElement(app)
         local list = foldersList(window)
         if not list then
-            assert(toggleSidebar(root), t("sidebar_missing"))
-            list = waitFor(4, t("sidebar_missing"), function() return foldersList(frontWindow(voiceID)) end)
+            assert(toggleSidebar(root), i18n("sidebar_missing"))
+            list = waitFor(4, i18n("sidebar_missing"), function() return foldersList(frontWindow(voiceID)) end)
             run.openedSidebar = true
         end
         -- Voice Memos places All Recordings first in FoldersList.
@@ -158,9 +172,9 @@ local function export(talkOver, t, done)
                 break
             end
         end
-        assert(button, t("all_folder_missing"))
-        if not button.AXSelected then assert(press(button), t("all_folder_open_failed")) end
-        waitFor(5, t("all_folder_switch_failed"), function()
+        assert(button, i18n("all_folder_missing"))
+        if not button.AXSelected then assert(press(button), i18n("all_folder_open_failed")) end
+        waitFor(5, i18n("all_folder_switch_failed"), function()
             return button.AXSelected and isLibraryReady(frontWindow(voiceID))
         end)
         run.allFolder = button
@@ -168,7 +182,7 @@ local function export(talkOver, t, done)
 
     local function recordingRows()
         local window = frontWindow(voiceID)
-        assert(isLibraryReady(window) and run.allFolder.AXSelected, t("all_list_unavailable"))
+        assert(isLibraryReady(window) and run.allFolder.AXSelected, i18n("all_list_unavailable"))
         local list = find(window, function(element) return element.AXIdentifier == "RecordingsList" end, 10)
         if not list then return {} end
 
@@ -183,7 +197,7 @@ local function export(talkOver, t, done)
 
     local function rowKey(row)
         local description = row.AXDescription
-        assert(type(description) == "string" and description ~= "", t("row_without_description"))
+        assert(type(description) == "string" and description ~= "", i18n("row_without_description"))
         return description .. "\n" .. tostring(row.AXValue or "")
     end
 
@@ -192,7 +206,7 @@ local function export(talkOver, t, done)
         local result
         for _, row in ipairs(rows) do
             if rowKey(row) == key then
-                assert(not result, t("duplicate_row", {name = key}))
+                assert(not result, i18n("duplicate_row", {name = key}))
                 result = row
             end
         end
@@ -204,14 +218,14 @@ local function export(talkOver, t, done)
     end
 
     local function copiedAudio(root, row)
-        assert(isLibraryReady(frontWindow(voiceID)), t("voice_busy"))
-        if not row.AXSelected then assert(press(row), t("select_recording_failed")) end
-        waitFor(5, t("select_recording_failed"), function()
+        assert(isLibraryReady(frontWindow(voiceID)), i18n("voice_busy"))
+        if not row.AXSelected then assert(press(row), i18n("select_recording_failed")) end
+        waitFor(5, i18n("select_recording_failed"), function()
             if not frontWindow(voiceID) or not row.AXSelected then return end
             if not isFocusedRecording(row, root) then row:setAttributeValue("AXFocused", true) end
             return isFocusedRecording(row, root)
         end)
-        local copy = waitFor(5, t("copy_unavailable"), function()
+        local copy = waitFor(5, i18n("copy_unavailable"), function()
             if not isFocusedRecording(row, root) then return end
             -- The active Copy command can have an identifier derived from its translated title.
             return menuCommand(root, "com.apple.menu.edit", "copy:", function(item)
@@ -221,13 +235,13 @@ local function export(talkOver, t, done)
 
         local before = pasteboard.changeCount()
         local saved = pasteboard.readAllData() or {}
-        assert(pasteboard.changeCount() == before, t("clipboard_changed"))
-        assert(isFocusedRecording(row, root), t("selection_changed"))
-        assert(press(copy), t("copy_command_failed"))
-        local result = waitFor(12, t("clipboard_audio_missing"), function()
+        assert(pasteboard.changeCount() == before, i18n("clipboard_changed"))
+        assert(isFocusedRecording(row, root), i18n("selection_changed"))
+        assert(press(copy), i18n("copy_command_failed"))
+        local result = waitFor(12, i18n("clipboard_audio_missing"), function()
             local count = pasteboard.changeCount()
             if count == before then return end
-            assert(isFocusedRecording(row, root), t("selection_changed"))
+            assert(isFocusedRecording(row, root), i18n("selection_changed"))
             local audio = pasteboard.readDataForUTI(audioType)
             if audio and #audio > 0 and pasteboard.changeCount() == count then
                 return {count = count, audio = audio}
@@ -237,7 +251,7 @@ local function export(talkOver, t, done)
         if pasteboard.changeCount() == result.count then
             if next(saved) then
                 if not pasteboard.writeAllData(saved) then
-                    talkOver.logger.w(t("clipboard_restore_failed"))
+                    logger.w(i18n("clipboard_restore_failed"))
                 end
             else
                 pasteboard.clearContents()
@@ -247,7 +261,7 @@ local function export(talkOver, t, done)
     end
 
     local function exportName(source)
-        local code, metadata = task(talkOver.ffprobe, {
+        local code, metadata = task(config.ffprobe, {
             "-v", "error", "-show_entries", "format_tags=creation_time",
             "-of", "default=noprint_wrappers=1:nokey=1", source,
         }, 5)
@@ -266,7 +280,7 @@ local function export(talkOver, t, done)
             end
         end
 
-        talkOver.logger.w(t("audio_creation_date_missing"))
+        logger.w(i18n("audio_creation_date_missing"))
         local created = hs.fs.attributes(source, "creation")
         return os.date("%Y%m%d %H%M%S", created) .. ".m4a"
     end
@@ -283,7 +297,7 @@ local function export(talkOver, t, done)
             suffix = suffix + 1
         end
         local linked, err = hs.fs.link(source, path)
-        assert(linked, t("publish_copy_failed", {detail = err}))
+        assert(linked, i18n("publish_copy_failed", {detail = err}))
         return path
     end
 
@@ -291,39 +305,40 @@ local function export(talkOver, t, done)
         local root = hs.axuielement.applicationElement(app)
         local audio = copiedAudio(root, row)
         local size = #audio
-        if size > talkOver.maxBytes then
-            local message = t("oversize_message", {name = row.AXDescription, size = string.format("%.1f", size / 1000000)})
-            talkOver.logger.w(message)
-            hs.notify.new({title = t("oversize_title"), informativeText = message}):send()
+        if size > config.maxBytes then
+            local message = i18n("oversize_message", {name = row.AXDescription, size = string.format("%.1f", size / 1000000)})
+            logger.w(message)
+            hs.notify.new({title = i18n("oversize_title"), informativeText = message}):send()
             return false
         end
 
         run.staging = destination .. "/.talkover-export-" .. hs.host.uuid()
         local created, mkdirError = hs.fs.mkdir(run.staging)
-        assert(created, t("staging_create_failed", {detail = mkdirError}))
+        assert(created, i18n("staging_create_failed", {detail = mkdirError}))
         local source = run.staging .. "/audio.m4a"
         run.stagedFile = source
         local file, openError = io.open(source, "wb")
-        assert(file, t("audio_open_failed", {detail = openError}))
+        assert(file, i18n("audio_open_failed", {detail = openError}))
         local written, writeError = file:write(audio)
         local closed, closeError = file:close()
         audio = nil
-        assert(written and closed, t("audio_write_failed", {detail = writeError or closeError}))
+        assert(written and closed, i18n("audio_write_failed", {detail = writeError or closeError}))
 
-        assert(hs.fs.symlinkAttributes(source, "size") == size, t("audio_write_incomplete"))
+        assert(hs.fs.symlinkAttributes(source, "size") == size, i18n("audio_write_incomplete"))
 
         local name = exportName(source)
         local selected = currentRow(key)
         assert(selected and selected == row and isFocusedRecording(selected, root),
-            t("export_selection_changed"))
+            i18n("export_selection_changed"))
         local delete = assert(menuCommand(root, "com.apple.menu.edit", "delete:", function(item)
             return item.AXMenuItemCmdChar == "\b" and item.AXMenuItemCmdModifiers == 8 -- Delete without Command
-        end), t("delete_action_missing"))
+        end), i18n("delete_action_missing"))
         local path = publish(source, name)
-        talkOver.logger.i(t("recording_exported", {path = path}))
-        assert(isFocusedRecording(selected, root), t("export_selection_changed"))
-        assert(press(delete), t("delete_action_failed"))
-        waitFor(8, t("deleted_row_still_present"), function()
+        run.exported = true
+        logger.i(i18n("recording_exported", {path = path}))
+        assert(isFocusedRecording(selected, root), i18n("export_selection_changed"))
+        assert(press(delete), i18n("delete_action_failed"))
+        waitFor(8, i18n("deleted_row_still_present"), function()
             return currentRow(key) == nil
         end)
         return true
@@ -336,8 +351,13 @@ local function export(talkOver, t, done)
     end
 
     local function main()
-        assert(hs.accessibilityState(), t("accessibility_required"))
-        assert(hs.fs.attributes(destination, "mode") == "directory", t("recordings_dir_missing", {path = destination}))
+        local session = hs.caffeinate.sessionProperties()
+        if not session or session.CGSSessionScreenIsLocked or session.kCGSSessionOnConsoleKey == false then
+            return "unavailable"
+        end
+
+        assert(hs.accessibilityState(), i18n("accessibility_required"))
+        assert(hs.fs.attributes(destination, "mode") == "directory", i18n("recordings_dir_missing", {path = destination}))
         run.previousApp = hs.application.frontmostApplication()
         local focused = hs.window.focusedWindow()
         local owner = focused and focused:application()
@@ -348,16 +368,15 @@ local function export(talkOver, t, done)
         if run.voiceApp then
             local root = hs.axuielement.applicationElement(run.voiceApp)
             local window = root.AXFocusedWindow or root.AXMainWindow or (root.AXWindows or {})[1]
-            if window and window.AXIdentifier == "SceneWindow" then
-                -- Если Диктофон уже открыт поверх других приложений, даём закончить запись или правку.
-                if not canNavigateLibrary(window) then return "busy" end
+            if window then
+                if window.AXIdentifier ~= "SceneWindow" or not canNavigateLibrary(window) then return "busy" end
                 moveWindowAside(window)
                 run.usedDesktop = true
             end
         end
         run.usedDesktop = true
-        assert(hs.application.launchOrFocusByBundleID(voiceID), t("voice_launch_failed"))
-        local app = waitFor(10, t("voice_launch_timeout"), function() return hs.application.get(voiceID) end)
+        assert(hs.application.launchOrFocusByBundleID(voiceID), i18n("voice_launch_failed"))
+        local app = waitFor(10, i18n("voice_launch_timeout"), function() return hs.application.get(voiceID) end)
         run.voiceApp = app
         local window = voiceWindow()
         if not canNavigateLibrary(window) then return "busy" end
@@ -368,14 +387,14 @@ local function export(talkOver, t, done)
             local row = recordingRows()[1]
             if not row then return end
             local key = rowKey(row)
-            assert(currentRow(key) == row, t("source_row_unverified"))
+            assert(currentRow(key) == row, i18n("source_row_unverified"))
             if not exportOne(app, row, key) then return end
             cleanStaging()
         end
     end
 
     local worker = coroutine.create(main)
-    local function finish(status, message)
+    local function finish(status)
         if run.finished then return end
         run.finished = true
         if run.timer then run.timer:stop() end
@@ -383,15 +402,17 @@ local function export(talkOver, t, done)
         cleanStaging()
         if run.usedDesktop then
             local restored, err = pcall(restoreDesktop)
-            if not restored then talkOver.logger.w(t("desktop_restore_failed", {detail = err})) end
+            if not restored then logger.w(i18n("desktop_restore_failed", {detail = err})) end
         end
-        done(status, message)
+        self.run = nil
+        if self.onFinished then self.onFinished(status, run.exported == true) end
     end
 
     local function advance()
         local ok, result = coroutine.resume(worker)
         if not ok then
-            finish("error", result)
+            logger.w(i18n("export_stopped", {detail = result}))
+            finish("error")
         elseif coroutine.status(worker) == "dead" then
             finish(result or "done")
         else
@@ -399,12 +420,16 @@ local function export(talkOver, t, done)
         end
     end
 
-    function run:cancel()
+    function run.cancel()
         finish("cancelled")
     end
 
+    self.run = run
     run.timer = hs.timer.doAfter(0, advance)
-    return run
 end
 
-return export
+function obj:stop()
+    if self.run then self.run.cancel() end
+end
+
+return obj
