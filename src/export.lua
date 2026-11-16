@@ -56,6 +56,7 @@ end
 
 function obj:init(config, logger, translate)
     self.config = config
+    self.maxBytes = config.maxBytes or 100 * 1000 * 1000
     self.logger = logger
     self.i18n = translate
 end
@@ -305,7 +306,7 @@ function obj:start()
         local root = hs.axuielement.applicationElement(app)
         local audio = copiedAudio(root, row)
         local size = #audio
-        if size > config.maxBytes then
+        if size > self.maxBytes then
             local message = i18n("oversize_message", {name = row.AXDescription, size = string.format("%.1f", size / 1000000)})
             logger.w(message)
             hs.notify.new({title = i18n("oversize_title"), informativeText = message}):send()

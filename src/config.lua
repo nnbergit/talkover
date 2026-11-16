@@ -6,7 +6,7 @@
 ---  * `locale` selects the interface language (`en` or `ru`). If omitted, TalkOver uses the preferred macOS language when available and English otherwise.
 ---  * `language` sets the Whisper language code or `auto`. If omitted, TalkOver uses the selected interface language.
 ---  * `ffmpeg`, `ffprobe`, and `whisper` optionally specify absolute executable paths. Otherwise TalkOver searches the user's shell PATH for `ffmpeg`, `ffprobe`, and `whisper-cli`.
----  * `maxBytes` sets the maximum size of a recording exported from Voice Memos, in bytes.
+---  * `maxBytes` sets the maximum size of a recording exported from Voice Memos, in bytes. The default is 100 MB.
 ---  * `recordsDir` is the folder for exported audio and other `.m4a` files to transcribe.
 ---  * `transcriptsDir` is the folder where TalkOver saves Markdown transcripts.
 ---  * `model` is the path to a local [whisper.cpp model](https://github.com/ggml-org/whisper.cpp/blob/master/models/README.md).

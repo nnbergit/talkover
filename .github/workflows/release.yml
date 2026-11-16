@@ -56,12 +56,15 @@ jobs:
           cp LICENSE "$spoon/"
 
           sed -n '/^---/p' src/config.lua > "$spoon/config.lua"
-          cat >> "$spoon/config.lua" <<'LUA'
-
-          return {
-              -- Set recordsDir, transcriptsDir, and model before starting TalkOver.
-              maxBytes = 100 * 1000 * 1000,
-          }
+          lua5.4 - src/config.lua >> "$spoon/config.lua" <<'LUA'
+          local fields = {}
+          for key in pairs(dofile(arg[1])) do
+              fields[#fields + 1] = string.format("    [%q] = nil,", key)
+          end
+          table.sort(fields)
+          print("\nreturn {")
+          print(table.concat(fields, "\n"))
+          print("}")
           LUA
           luac5.4 -p "$spoon/config.lua"
 
