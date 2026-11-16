@@ -11,7 +11,7 @@ obj.license = "MIT - https://opensource.org/licenses/MIT"
 
 --- TalkOver:init()
 --- Method
---- Loads the configuration, resolves command paths, and prepares the watcher, exporter, and transcriber.
+--- Loads and validates the configuration, resolves command paths, and prepares the watcher, exporter, and transcriber.
 ---
 --- Parameters:
 ---  * None
@@ -29,11 +29,24 @@ function obj:init()
         self.config.language = self.config.locale:lower():match("^[a-z]+")
     end
 
+    for _, setting in ipairs({"recordsDir", "transcriptsDir", "model"}) do
+        if type(self.config[setting]) ~= "string" or not self.config[setting]:find("%S") then
+            self.logger.e(self.i18n("config_path_required", {setting = setting}))
+            return self
+        end
+    end
+
+    if type(self.config.language) ~= "string" or not self.config.language:find("%S") then
+        self.logger.e(self.i18n("unsupported_whisper_language", {language = self.config.language}))
+        return self
+    end
+
     for setting, executable in pairs({ffmpeg = "ffmpeg", ffprobe = "ffprobe", whisper = "whisper-cli"}) do
         if self.config[setting] == nil then
-            local output, found = hs.execute("/usr/bin/which " .. executable, true)
-            local path = found and output:match("([^\r\n]+)[\r\n]*$")
-            if not path or path:sub(1, 1) ~= "/" then
+            -- A marker separates the path from the shell's startup output.
+            local output, found = hs.execute("/usr/bin/printf 'Executable path: ' && /usr/bin/which " .. executable, true)
+            local path = found and output:match("Executable path: (/[^\r\n]+)")
+            if not path then
                 error(self.i18n("tool_not_found", {tool = executable}), 2)
             end
             self.config[setting] = path
@@ -72,12 +85,7 @@ end
 --- Returns:
 ---  * The TalkOver object
 function obj:start()
-    if type(self.config.language) ~= "string" or not self.config.language:find("%S") then
-        self.logger.e(self.i18n("unsupported_whisper_language", {language = self.config.language}))
-        return self
-    end
-
-    self.watcher:start()
+    if self.watcher then self.watcher:start() end
     return self
 end
 
@@ -91,6 +99,7 @@ end
 --- Returns:
 ---  * The TalkOver object
 function obj:stop()
+    if not self.watcher then return self end
     self.watcher:stop()
     self.export:stop()
     self.transcribe:stop()

@@ -11,6 +11,7 @@ return {
     clipboard_audio_missing = "Диктофон не передал выбранную запись в буфер как .m4a",
     clipboard_changed = "Буфер обмена изменился перед копированием",
     clipboard_restore_failed = "Не удалось восстановить содержимое буфера обмена",
+    config_path_required = "Укажите %{setting} в настройках TalkOver перед запуском.",
     conversion_failed = "Не удалось конвертировать аудио (FFmpeg): %{detail}",
     copy_command_failed = "Не удалось выполнить команду копирования",
     copy_unavailable = "Команда копирования недоступна для выбранной записи",

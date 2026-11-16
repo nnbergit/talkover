@@ -11,6 +11,7 @@ return {
     clipboard_audio_missing = "Voice Memos did not copy the selected recording as an .m4a file",
     clipboard_changed = "The clipboard changed before copying",
     clipboard_restore_failed = "Could not restore the clipboard contents",
+    config_path_required = "Set %{setting} in the TalkOver config before starting.",
     conversion_failed = "Could not convert audio (FFmpeg): %{detail}",
     copy_command_failed = "Could not run the Copy command",
     copy_unavailable = "The Copy command is unavailable for the selected recording",

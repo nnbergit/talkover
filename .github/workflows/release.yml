@@ -1,0 +1,81 @@
+name: Release TalkOver
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out TalkOver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the release version
+        run: |
+          version=$(sed -nE 's/^obj\.version = "([^"]+)"$/\1/p' src/init.lua)
+          if [[ -z "$version" || "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Release tag $GITHUB_REF_NAME does not match obj.version in src/init.lua: $version" >&2
+            exit 1
+          fi
+
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lua5.4
+
+      - name: Check Lua syntax
+        run: |
+          while IFS= read -r -d '' file; do
+            luac5.4 -p "$file"
+          done < <(find src -type f -name '*.lua' -print0)
+
+      - name: Check out the Hammerspoon documentation generator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Hammerspoon/hammerspoon
+          ref: 1469832361b4c3687ec7d589c1b4efe4d3b742ee # 1.1.1
+          path: .build/hammerspoon
+          persist-credentials: false
+
+      - name: Build the Spoon archive
+        run: |
+          spoon="$RUNNER_TEMP/TalkOver.spoon"
+          mkdir -p "$spoon"
+          cp -R src/. "$spoon/"
+          cp LICENSE "$spoon/"
+
+          sed -n '/^---/p' src/config.lua > "$spoon/config.lua"
+          cat >> "$spoon/config.lua" <<'LUA'
+
+          return {
+              -- Set recordsDir, transcriptsDir, and model before starting TalkOver.
+              maxBytes = 100 * 1000 * 1000,
+          }
+          LUA
+          luac5.4 -p "$spoon/config.lua"
+
+          python3 .build/hammerspoon/scripts/docs/bin/build_docs.py \
+            --json --standalone --output_dir "$spoon" src
+          rm "$spoon/docs_index.json"
+
+          cd "$RUNNER_TEMP"
+          zip -qr TalkOver.spoon.zip TalkOver.spoon
+          unzip -tq TalkOver.spoon.zip
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/TalkOver.spoon.zip" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
